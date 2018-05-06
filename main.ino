@@ -3,13 +3,15 @@
 #include <Keypad.h>
 #include <EEPROM.h>
 #include <VirtualWire.h>
+
 #define ITEMCOUNT 5
-#define RECV_PIN 12
-#define TRANS_PIN 11
+#define RECV_PIN 11
+#define TRANS_PIN 12
 #define SIG_LEN 4
 #define BUFFER 129
 #define SECBUFFER 128
 #define MENUDELAY 1200
+#define WORKBAUD 115200
 char hexaKeys[4][3] = {
   {'1', '2', '3'},
   {'4', '5', '6'},
@@ -31,7 +33,7 @@ void CenteredWrite(String WRS,int row){
   lcd.print(WRS);
   }
 int SelectedIndex = 0;
-String Items[ITEMCOUNT] = {"Cihazlari Ara","Driver Modu","Anahtar Esle","Proje Hakk.","Uyku Modu"};
+String Items[ITEMCOUNT] = {"Driver Modu","Anahtar Esle","Proje Hakk.","EEPROM Reset","Uyku Modu"};
 int EEPROM_SIZE = EEPROM.length();
 byte GSIG[4] = {243,25,210,185};
 byte SSIG[4] = {129,82,222,189};
@@ -68,7 +70,7 @@ void SetupKey(){
     //Create ID
     byte sepy[64];
     for(int i = 0;i < 64;i++){
-      sepy[i] = random(0,255);
+      sepy[i] = random(32,127);
     }
     delay(1200);
     lcd.clear();
@@ -147,8 +149,7 @@ void setup()
   /*Begin of ui*/
   vw_set_tx_pin(TRANS_PIN);
   vw_set_rx_pin(RECV_PIN);
-  vw_setup(2000);
-  vw_wait_rx_max(100);
+  vw_setup(4000);
   vw_rx_start();
   CenteredWrite(TOBegin[0][0],0);
   CenteredWrite(TOBegin[0][1],1);
@@ -194,7 +195,7 @@ void loop()
   if (customKey){
     if(TurnState){
     if(customKey == '5'){
-      if(SelectedIndex == 3){
+      if(SelectedIndex == 2){
         lcd.clear();
         for(int i = 1;i < 4;i++){
           waitClear();
@@ -203,12 +204,18 @@ void loop()
         }
         lcd.clear();
         RefreshMenu();
+      }else if(SelectedIndex == 3){
+        lcd.clear();
+        EEPROMClear();
+        CenteredWrite("Cihazi Yeniden",0);
+        CenteredWrite("Baslatin",1);
+        delay(100000);
       }else if(SelectedIndex == 4){
         lcd.clear();
         lcd.noBacklight();
         lcd.noDisplay();
         TurnState = false;
-      }else if(SelectedIndex == 1){
+      }else if(SelectedIndex == 0){
         lcd.clear();
         CenteredWrite(Items[1],0);
         CenteredWrite("Bilgisayar Bekleniyor",1);
@@ -216,7 +223,7 @@ void loop()
         CenteredWrite(Items[1],0);
         CenteredWrite("ID:"+CIDS,1);
         DriverMode = true;
-        Serial.begin(115200);
+        Serial.begin(WORKBAUD);
         return;
         }
     }
@@ -240,20 +247,20 @@ void loop()
     }
   }
   }else{
-    char data[BUFFER];
+    byte data[BUFFER];
     uint8_t rdata[BUFFER];
     if (Serial.available() > 0) {
        lcd.setCursor(0,1);
        lcd.print("*>");
-       Serial.readBytes(data,BUFFER);
+       Serial.readBytes(data,BUFFER); 
        if(!GHLM){
-            String datas = String(data);
+            String datas = String((char*)data);
             if(datas=="SEPYGCID"){
               Serial.print("OKGCID");
               Serial.println(CIDS);
               memset(data, 0, sizeof(data));
               Serial.readBytes(data ,BUFFER);       
-              datas = String(data);
+              datas = String((char*)data);
               if(datas == "SEPYKEY"){
                 delay(100);
                 for(int i=4;i < 68;i++){
@@ -262,7 +269,7 @@ void loop()
                 Serial.println("SEPYPASS");
                 memset(data, 0, sizeof(data));
                 Serial.readBytes(data ,BUFFER);
-                datas = String(data);
+                datas = String((char*)data);
                 if(datas=="COMPLETED"){
                   lcd.setCursor(0,0);
                   lcd.print("*");
@@ -274,23 +281,55 @@ void loop()
                 }
               }
         }else{
-          if(data[SECBUFFER]=>0xA0 && data[SECBUFFER]<0xA9){
+          
+          vw_send((uint8_t *)data, BUFFER);
+          vw_wait_tx();
+          if(vw_wait_rx_max(2000)&&vw_get_message(rdata,sizeof(rdata))){
+            Serial.write(0x2);
+            Serial.write(rdata,sizeof(rdata));
+            lcd.setCursor(0,0);
+            lcd.print("*"+String((char*)rdata[0]));
+          }else{
+            Serial.write(0x1);
+            lcd.setCursor(0,0);
+            lcd.print("!");
+          }
+          /*
+         if((char*)data[SECBUFFER]==0x0E){
+            lcd.setCursor(14,0);
+            lcd.print("^");
             vw_send((uint8_t *)data, BUFFER);
             vw_wait_tx();
             Serial.write(0x3);
-          }else if(data[SECBUFFER]=>0xB0 && data[SECBUFFER]<0xB9){
-            if(vw_get_message(rdata, BUFFER)){
-                Serial.write(rdata,BUFFER);
-              }else{
-                for(int i;i<BUFFER-1;i++)
+            lcd.setCursor(14,0);
+            lcd.print("*");
+          }else if((char*)data[SECBUFFER]==0x0F){
+            lcd.setCursor(15,0);
+            lcd.print("!");
+            if(vw_wait_rx_max(200)&&vw_get_message(rdata, (uint8_t)BUFFER)){
+              lcd.setCursor(15,0);
+              lcd.print("^");
+              Serial.write(rdata,BUFFER);
+            }else{
+                for(int i;i< BUFFER-1;i++)
                   Serial.write(0x0);
-                Serial.write(0x2);
                 }
-            }
+                Serial.write(0x2);
+                lcd.setCursor(15,0);
+                lcd.print("*");
+            }else{
+              lcd.setCursor(1,0);
+              lcd.print("^");
+              lcd.setCursor(15,1);
+              lcd.print((char*)data[SECBUFFER]);
+              }
+            lcd.setCursor(16,1);
+            lcd.print("*");*/
           }
+          
        memset(data, 0, sizeof(data));
        memset(rdata, 0, sizeof(rdata));
-      }else{
+       }else{
         lcd.setCursor(0,1);
         lcd.print("!>");
         }
